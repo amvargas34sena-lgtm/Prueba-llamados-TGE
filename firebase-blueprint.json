@@ -1,0 +1,64 @@
+{
+  "entities": {
+    "Aprendiz": {
+      "title": "Aprendiz",
+      "description": "Information about a SENA apprentice.",
+      "type": "object",
+      "properties": {
+        "nombre": { "type": "string" },
+        "documento": { "type": "string" },
+        "correo": { "type": "string", "format": "email" },
+        "celular": { "type": "string" },
+        "programa": { "type": "string" },
+        "ficha": { "type": "string" },
+        "estado": { "type": "string" },
+        "jornada": { "type": "string" }
+      },
+      "required": ["nombre", "documento", "correo", "ficha"]
+    },
+    "Novedad": {
+      "title": "Novedad",
+      "description": "A disciplinary infraction record.",
+      "type": "object",
+      "properties": {
+        "fecha": { "type": "string", "format": "date" },
+        "instructor": { "type": "string" },
+        "ficha": { "type": "string" },
+        "aprendizId": { "type": "string" },
+        "tipo": { "type": "string", "enum": ["llegada_tarde", "uniforme", "actividades"] },
+        "observacion": { "type": "string" },
+        "evidenciaUrl": { "type": "string" }
+      },
+      "required": ["fecha", "instructor", "aprendizId", "tipo"]
+    },
+    "Llamado": {
+      "title": "Llamado",
+      "description": "A disciplinary warning record.",
+      "type": "object",
+      "properties": {
+        "fecha": { "type": "string", "format": "date" },
+        "aprendizId": { "type": "string" },
+        "motivo": { "type": "string" },
+        "estado": { "type": "string" },
+        "evidenciaUrl": { "type": "string" },
+        "compromisos": { "type": "string" },
+        "nivel": { "type": "number", "enum": [1, 2, 3] }
+      },
+      "required": ["fecha", "aprendizId", "nivel"]
+    }
+  },
+  "firestore": {
+    "/aprendices/{aprendizId}": {
+      "schema": { "$ref": "Aprendiz" },
+      "description": "Collection of apprentices."
+    },
+    "/novedades/{novedadId}": {
+      "schema": { "$ref": "Novedad" },
+      "description": "Collection of disciplinary infractions."
+    },
+    "/llamados/{llamadoId}": {
+      "schema": { "$ref": "Llamado" },
+      "description": "Collection of disciplinary warnings."
+    }
+  }
+}

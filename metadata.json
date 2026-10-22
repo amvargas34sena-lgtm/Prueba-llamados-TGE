@@ -1,0 +1,6 @@
+{
+  "name": "SENA - CSF - Gestión Empresarial",
+  "description": "Sistema de gestión y seguimiento disciplinario para aprendices SENA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
