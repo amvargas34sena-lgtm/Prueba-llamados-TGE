@@ -5,8 +5,7 @@ import {
   FileText, 
   AlertTriangle, 
   PlusCircle, 
-  Search, 
-  Filter, 
+  CheckSquare, 
   Printer, 
   Download, 
   Clock, 
@@ -14,26 +13,45 @@ import {
   CheckCircle2, 
   ShieldAlert, 
   ShieldCheck, 
-  Calendar,
+  Mail,
   Sparkles,
   BookOpen
 } from 'lucide-react';
-import { Aprendiz, Novedad, TipoIncumplimiento, PlanMejoramiento } from '../types';
+import { Aprendiz, Novedad, TipoIncumplimiento, ChecklistRegistro } from '../types';
+import { ChecklistTable } from './ChecklistTable';
+import { InstructorDashboard } from './InstructorDashboard';
 
 interface InstructorPortalProps {
   aprendices: Aprendiz[];
   novedades: Novedad[];
+  checklist: ChecklistRegistro[];
   onAddNovedad: (novedad: Omit<Novedad, 'id' | 'nivelLlamado'>) => void;
+  onUpdateChecklistCell: (
+    documento: string, 
+    field: keyof ChecklistRegistro, 
+    value: string | boolean | undefined
+  ) => void;
   onOpenReportModal: (aprendiz: Aprendiz, novedades: Novedad[]) => void;
+  onOpenEmailModal: (
+    aprendiz: Aprendiz, 
+    tipo: 'uniforme' | 'puntualidad' | 'actividades' | 'pmd', 
+    nivel: 1 | 2 | 3,
+    fecha?: string
+  ) => void;
+  onBatchUpdateEmails: (updates: { documento: string; correo: string }[]) => void;
 }
 
 export const InstructorPortal: React.FC<InstructorPortalProps> = ({
   aprendices,
   novedades,
+  checklist,
   onAddNovedad,
-  onOpenReportModal
+  onUpdateChecklistCell,
+  onOpenReportModal,
+  onOpenEmailModal,
+  onBatchUpdateEmails
 }) => {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'registrar' | 'aprendices' | 'planes' | 'reportes'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'checklist' | 'dashboard' | 'registrar' | 'aprendices' | 'planes'>('checklist');
   const [filterFicha, setFilterFicha] = useState<string>('todos');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
@@ -52,41 +70,52 @@ export const InstructorPortal: React.FC<InstructorPortalProps> = ({
 
   const [formSuccessMessage, setFormSuccessMessage] = useState<string | null>(null);
 
-  // Statistics calculation
+  // Statistics calculation combining checklist and novedades
   const stats = useMemo(() => {
     const totalAprendices = aprendices.length;
-    const totalNovedades = novedades.length;
 
-    // Counts per learner
-    const countMap: Record<string, { puntualidad: number; uniforme: number; actividades: number; total: number }> = {};
+    // Build map from checklist
+    const countMap: Record<string, { puntualidad: number; uniforme: number; actividades: number; total: number; hasPMD: boolean }> = {};
+    
     aprendices.forEach(a => {
-      countMap[a.documento] = { puntualidad: 0, uniforme: 0, actividades: 0, total: 0 };
+      countMap[a.documento] = { puntualidad: 0, uniforme: 0, actividades: 0, total: 0, hasPMD: false };
     });
 
-    novedades.forEach(n => {
-      if (countMap[n.aprendizDocumento]) {
-        countMap[n.aprendizDocumento][n.tipo]++;
-        countMap[n.aprendizDocumento].total++;
-      }
+    checklist.forEach(c => {
+      const u = (c.uniforme1Fecha ? 1 : 0) + (c.uniforme2Fecha ? 1 : 0) + (c.uniforme3Fecha ? 1 : 0);
+      const p = (c.puntualidad1Fecha ? 1 : 0) + (c.puntualidad2Fecha ? 1 : 0) + (c.puntualidad3Fecha ? 1 : 0);
+      const a = (c.evidencias1Fecha ? 1 : 0) + (c.evidencias2Fecha ? 1 : 0) + (c.evidencias3Fecha ? 1 : 0);
+      const total = u + p + a;
+      const hasPMD = Boolean(c.uniformePlanMejoramiento || c.puntualidadPlanMejoramiento || c.evidenciasPlanMejoramiento || total >= 3);
+
+      countMap[c.aprendizDocumento] = {
+        uniforme: u,
+        puntualidad: p,
+        actividades: a,
+        total,
+        hasPMD
+      };
     });
 
     let verde = 0;
     let amarillo = 0;
     let rojo = 0;
+    let totalPuntualidad = 0;
+    let totalUniforme = 0;
+    let totalActividades = 0;
 
     Object.values(countMap).forEach(c => {
+      totalPuntualidad += c.puntualidad;
+      totalUniforme += c.uniforme;
+      totalActividades += c.actividades;
+
       if (c.total === 0) verde++;
       else if (c.total < 3) amarillo++;
       else rojo++;
     });
 
-    const totalPuntualidad = novedades.filter(n => n.tipo === 'puntualidad').length;
-    const totalUniforme = novedades.filter(n => n.tipo === 'uniforme').length;
-    const totalActividades = novedades.filter(n => n.tipo === 'actividades').length;
-
     return {
       totalAprendices,
-      totalNovedades,
       verde,
       amarillo,
       rojo,
@@ -95,9 +124,9 @@ export const InstructorPortal: React.FC<InstructorPortalProps> = ({
       totalActividades,
       countMap
     };
-  }, [aprendices, novedades]);
+  }, [aprendices, checklist]);
 
-  // Filtered apprentices for the table
+  // Filtered apprentices for the general table
   const filteredAprendices = useMemo(() => {
     return aprendices.filter(a => {
       const matchFicha = filterFicha === 'todos' || a.ficha === filterFicha;
@@ -111,9 +140,9 @@ export const InstructorPortal: React.FC<InstructorPortalProps> = ({
     });
   }, [aprendices, filterFicha, searchTerm]);
 
-  // Apprentices with 3 or more warnings (Active PMD)
+  // Learners with active PMD
   const aprendicesConPMD = useMemo(() => {
-    return aprendices.filter(a => (stats.countMap[a.documento]?.total || 0) >= 3);
+    return aprendices.filter(a => (stats.countMap[a.documento]?.hasPMD || false));
   }, [aprendices, stats.countMap]);
 
   // Submit new incident
@@ -139,76 +168,66 @@ export const InstructorPortal: React.FC<InstructorPortalProps> = ({
       soporteUrl: formData.soporteUrl
     });
 
+    // Also update checklist corresponding field
+    const c = checklist.find(item => item.aprendizDocumento === formData.aprendizDocumento);
+    if (formData.tipo === 'uniforme') {
+      if (!c?.uniforme1Fecha) onUpdateChecklistCell(formData.aprendizDocumento, 'uniforme1Fecha', formData.fecha);
+      else if (!c?.uniforme2Fecha) onUpdateChecklistCell(formData.aprendizDocumento, 'uniforme2Fecha', formData.fecha);
+      else onUpdateChecklistCell(formData.aprendizDocumento, 'uniforme3Fecha', formData.fecha);
+    } else if (formData.tipo === 'puntualidad') {
+      if (!c?.puntualidad1Fecha) onUpdateChecklistCell(formData.aprendizDocumento, 'puntualidad1Fecha', formData.fecha);
+      else if (!c?.puntualidad2Fecha) onUpdateChecklistCell(formData.aprendizDocumento, 'puntualidad2Fecha', formData.fecha);
+      else onUpdateChecklistCell(formData.aprendizDocumento, 'puntualidad3Fecha', formData.fecha);
+    } else if (formData.tipo === 'actividades') {
+      if (!c?.evidencias1Fecha) onUpdateChecklistCell(formData.aprendizDocumento, 'evidencias1Fecha', formData.fecha);
+      else if (!c?.evidencias2Fecha) onUpdateChecklistCell(formData.aprendizDocumento, 'evidencias2Fecha', formData.fecha);
+      else onUpdateChecklistCell(formData.aprendizDocumento, 'evidencias3Fecha', formData.fecha);
+    }
+
     const aprendiz = aprendices.find(a => a.documento === formData.aprendizDocumento);
     const nombre = aprendiz ? `${aprendiz.nombre} ${aprendiz.apellidos}` : 'el aprendiz';
 
     if (nextLevel >= 3) {
-      setFormSuccessMessage(`¡Alerta Crítica! ${nombre} ha alcanzado ${nextLevel} llamados de atención. Se ha ACTIVADO AUTOMÁTICAMENTE el Plan de Mejoramiento Disciplinario conforme al Acuerdo 009 de 2024.`);
+      setFormSuccessMessage(`¡Alerta Crítica! ${nombre} ha acumulado ${nextLevel} llamados de atención. Se ha ACTIVADO AUTOMÁTICAMENTE el Plan de Mejoramiento Disciplinario.`);
     } else {
-      setFormSuccessMessage(`Llamado #${nextLevel} registrado con éxito para ${nombre}. Se notificó la medida correctiva.`);
+      setFormSuccessMessage(`Llamado #${nextLevel} registrado para ${nombre}.`);
     }
 
-    // Reset fields except ficha
-    setFormData(prev => ({
-      ...prev,
-      observacion: '',
-      soporteUrl: ''
-    }));
-
-    setTimeout(() => {
-      setFormSuccessMessage(null);
-    }, 7000);
-  };
-
-  // Export CSV
-  const handleExportCSV = () => {
-    const headers = ["Ficha", "TipoDoc", "Documento", "Nombre", "Apellidos", "Llamados_Puntualidad", "Llamados_Uniforme", "Llamados_Evidencias", "Total_Llamados", "Estado_Reglamentario"];
-    const rows = aprendices.map(a => {
-      const counts = stats.countMap[a.documento] || { puntualidad: 0, uniforme: 0, actividades: 0, total: 0 };
-      const estado = counts.total === 0 ? "Al Dia" : counts.total < 3 ? "Atencion Preventiva" : "Plan de Mejoramiento Activo";
-      return [
-        `"${a.ficha}"`,
-        `"${a.tipoDocumento}"`,
-        `"${a.documento}"`,
-        `"${a.nombre}"`,
-        `"${a.apellidos}"`,
-        counts.puntualidad,
-        counts.uniforme,
-        counts.actividades,
-        counts.total,
-        `"${estado}"`
-      ].join(",");
-    });
-
-    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `Reporte_Disciplinario_SENA_CSF_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    setFormData(prev => ({ ...prev, observacion: '', soporteUrl: '' }));
+    setTimeout(() => setFormSuccessMessage(null), 7000);
   };
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
       
-      {/* Navegación interna del Instructor */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-4">
+      {/* Navegación y Barra de Pestañas del Instructor */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
-          <span className="text-xs font-bold uppercase tracking-wider text-emerald-700 bg-emerald-100 px-3 py-1 rounded-full inline-flex items-center gap-1.5 mb-1">
+          <span className="text-xs font-bold uppercase tracking-wider text-emerald-800 bg-emerald-100 px-3 py-1 rounded-full inline-flex items-center gap-1.5 mb-1">
             <Sparkles className="w-3.5 h-3.5" />
-            Panel de Control del Instructor
+            Panel de Gestión del Instructor · SENA CSF
           </span>
           <h2 className="text-2xl font-black text-slate-900 tracking-tight">
-            Gestión Disciplinaria y Preventiva · Acuerdo 009 de 2024
+            Control Disciplinario y Formativo · Acuerdo 009 de 2024
           </h2>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <button
+            onClick={() => setActiveTab('checklist')}
+            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl text-xs font-extrabold transition-all ${
+              activeTab === 'checklist'
+                ? 'bg-emerald-700 text-white shadow-md'
+                : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <CheckSquare className="w-4 h-4" />
+            Lista de Verificación
+          </button>
+
+          <button
             onClick={() => setActiveTab('dashboard')}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl text-xs font-bold transition-all ${
+            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl text-xs font-extrabold transition-all ${
               activeTab === 'dashboard'
                 ? 'bg-emerald-700 text-white shadow-md'
                 : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
@@ -217,31 +236,22 @@ export const InstructorPortal: React.FC<InstructorPortalProps> = ({
             <LayoutDashboard className="w-4 h-4" />
             Dashboard
           </button>
+
           <button
             onClick={() => setActiveTab('registrar')}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl text-xs font-bold transition-all ${
+            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl text-xs font-extrabold transition-all ${
               activeTab === 'registrar'
                 ? 'bg-emerald-700 text-white shadow-md'
                 : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
             }`}
           >
             <PlusCircle className="w-4 h-4" />
-            Registrar Novedad
+            Nueva Novedad
           </button>
-          <button
-            onClick={() => setActiveTab('aprendices')}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl text-xs font-bold transition-all ${
-              activeTab === 'aprendices'
-                ? 'bg-emerald-700 text-white shadow-md'
-                : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <Users className="w-4 h-4" />
-            Aprendices ({aprendices.length})
-          </button>
+
           <button
             onClick={() => setActiveTab('planes')}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl text-xs font-bold transition-all ${
+            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl text-xs font-extrabold transition-all ${
               activeTab === 'planes'
                 ? 'bg-red-700 text-white shadow-md'
                 : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
@@ -250,187 +260,53 @@ export const InstructorPortal: React.FC<InstructorPortalProps> = ({
             <AlertTriangle className="w-4 h-4" />
             Planes de Mejoramiento ({aprendicesConPMD.length})
           </button>
-          <button
-            onClick={handleExportCSV}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white shadow-md transition-all"
-            title="Exportar base de datos a Excel / CSV"
-          >
-            <Download className="w-4 h-4" />
-            Exportar CSV
-          </button>
         </div>
       </div>
 
-      {/* 1. VISTA DASHBOARD */}
-      {activeTab === 'dashboard' && (
-        <div className="space-y-6">
-          
-          {/* Tarjetas KPI Superiores */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="p-5 rounded-3xl bg-white border border-slate-200 shadow-sm space-y-1">
-              <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5">
-                <Users className="w-4 h-4 text-emerald-600" />
-                Total Aprendices
-              </span>
-              <div className="text-3xl font-black text-slate-900">{stats.totalAprendices}</div>
-              <p className="text-[11px] text-slate-500">Fichas 3384701 & 3384773</p>
-            </div>
-
-            <div className="p-5 rounded-3xl bg-white border border-slate-200 shadow-sm space-y-1">
-              <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5">
-                <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                Récord Ejemplar (0 Llamados)
-              </span>
-              <div className="text-3xl font-black text-emerald-600">{stats.verde}</div>
-              <p className="text-[11px] text-emerald-700 font-medium">
-                {((stats.verde / stats.totalAprendices) * 100).toFixed(0)}% de la población formativa
-              </p>
-            </div>
-
-            <div className="p-5 rounded-3xl bg-white border border-slate-200 shadow-sm space-y-1">
-              <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5">
-                <AlertTriangle className="w-4 h-4 text-amber-500" />
-                Atención Preventiva (1-2)
-              </span>
-              <div className="text-3xl font-black text-amber-600">{stats.amarillo}</div>
-              <p className="text-[11px] text-amber-700 font-medium">Con medidas formativas activas</p>
-            </div>
-
-            <div className="p-5 rounded-3xl bg-white border border-slate-200 shadow-sm space-y-1">
-              <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5">
-                <ShieldAlert className="w-4 h-4 text-red-600" />
-                Plan Mejoramiento (≥ 3)
-              </span>
-              <div className="text-3xl font-black text-red-600">{stats.rojo}</div>
-              <p className="text-[11px] text-red-700 font-medium">Activa remisión a Comité si incumple</p>
-            </div>
-          </div>
-
-          {/* Distribución por los 3 Componentes Clave */}
-          <div className="p-6 rounded-3xl bg-white border border-slate-200 shadow-sm space-y-4">
-            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <BookOpen className="w-5 h-5 text-emerald-600" />
-              Incidencias por Componente Disciplinario (Reglamento del Aprendiz)
-            </h3>
-            
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="p-4 rounded-2xl bg-amber-50/80 border border-amber-200 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-xl bg-amber-500 text-white">
-                    <Clock className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-sm text-slate-900">1. Puntualidad</h4>
-                    <span className="text-xs text-amber-900/80">Llegadas tardías</span>
-                  </div>
-                </div>
-                <span className="text-2xl font-black text-amber-700">{stats.totalPuntualidad}</span>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-emerald-50/80 border border-emerald-200 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-xl bg-emerald-600 text-white">
-                    <Shirt className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-sm text-slate-900">2. Uniforme SENA</h4>
-                    <span className="text-xs text-emerald-900/80">Porte no reglamentario</span>
-                  </div>
-                </div>
-                <span className="text-2xl font-black text-emerald-800">{stats.totalUniforme}</span>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-blue-50/80 border border-blue-200 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-xl bg-blue-600 text-white">
-                    <CheckCircle2 className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-sm text-slate-900">3. Evidencias</h4>
-                    <span className="text-xs text-blue-900/80">Entregas extemporáneas</span>
-                  </div>
-                </div>
-                <span className="text-2xl font-black text-blue-800">{stats.totalActividades}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Comparativa por Ficha y Acceso Rápido */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="p-6 rounded-3xl bg-white border border-slate-200 shadow-sm space-y-4">
-              <h3 className="text-base font-bold text-slate-900">Ficha 3384701 · Gestión Empresarial</h3>
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between py-1.5 border-b border-slate-100">
-                  <span className="text-slate-600">Aprendices inscritos:</span>
-                  <span className="font-bold text-slate-900">28</span>
-                </div>
-                <div className="flex justify-between py-1.5 border-b border-slate-100">
-                  <span className="text-slate-600">Novedades registradas:</span>
-                  <span className="font-bold text-slate-900">{novedades.filter(n => n.ficha === '3384701').length}</span>
-                </div>
-                <div className="flex justify-between py-1.5">
-                  <span className="text-slate-600">Planes de mejoramiento activos:</span>
-                  <span className="font-bold text-red-600">
-                    {aprendices.filter(a => a.ficha === '3384701' && (stats.countMap[a.documento]?.total || 0) >= 3).length}
-                  </span>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  setFilterFicha('3384701');
-                  setActiveTab('aprendices');
-                }}
-                className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition-colors"
-              >
-                Ver aprendices de la Ficha 3384701
-              </button>
-            </div>
-
-            <div className="p-6 rounded-3xl bg-white border border-slate-200 shadow-sm space-y-4">
-              <h3 className="text-base font-bold text-slate-900">Ficha 3384773 · Gestión Empresarial</h3>
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between py-1.5 border-b border-slate-100">
-                  <span className="text-slate-600">Aprendices inscritos:</span>
-                  <span className="font-bold text-slate-900">28</span>
-                </div>
-                <div className="flex justify-between py-1.5 border-b border-slate-100">
-                  <span className="text-slate-600">Novedades registradas:</span>
-                  <span className="font-bold text-slate-900">{novedades.filter(n => n.ficha === '3384773').length}</span>
-                </div>
-                <div className="flex justify-between py-1.5">
-                  <span className="text-slate-600">Planes de mejoramiento activos:</span>
-                  <span className="font-bold text-red-600">
-                    {aprendices.filter(a => a.ficha === '3384773' && (stats.countMap[a.documento]?.total || 0) >= 3).length}
-                  </span>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  setFilterFicha('3384773');
-                  setActiveTab('aprendices');
-                }}
-                className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition-colors"
-              >
-                Ver aprendices de la Ficha 3384773
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* 1. VISTA LISTA DE VERIFICACIÓN (MATRIZ DISCIPLINARIA) */}
+      {activeTab === 'checklist' && (
+        <ChecklistTable
+          aprendices={aprendices}
+          checklist={checklist}
+          onUpdateChecklistCell={onUpdateChecklistCell}
+          onOpenEmailModal={onOpenEmailModal}
+          onOpenReportModal={(apr) => {
+            const aprNovedades = novedades.filter(n => n.aprendizDocumento === apr.documento);
+            onOpenReportModal(apr, aprNovedades);
+          }}
+          onBatchUpdateEmails={onBatchUpdateEmails}
+        />
       )}
 
-      {/* 2. VISTA REGISTRAR NOVEDAD */}
+      {/* 2. VISTA DASHBOARD (RECHARTS) */}
+      {activeTab === 'dashboard' && (
+        <InstructorDashboard
+          aprendices={aprendices}
+          checklist={checklist}
+          novedades={novedades}
+          onSelectAprendiz={(documento) => {
+            const apr = aprendices.find(a => a.documento === documento);
+            if (apr) {
+              const aprNovedades = novedades.filter(n => n.aprendizDocumento === apr.documento);
+              onOpenReportModal(apr, aprNovedades);
+            }
+          }}
+        />
+      )}
+
+      {/* 3. VISTA REGISTRAR NOVEDAD INDIVIDUAL */}
       {activeTab === 'registrar' && (
         <div className="max-w-3xl mx-auto bg-white rounded-3xl border border-slate-200 shadow-md p-6 sm:p-8 space-y-6">
           <div className="border-b border-slate-100 pb-4">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 mb-2">
               <PlusCircle className="w-3.5 h-3.5" />
-              Módulo de Registro Disciplinario
+              Registro Rápido de Incumplimiento
             </span>
             <h3 className="text-2xl font-black text-slate-900 tracking-tight">
-              Registrar Incumplimiento o Falta Formativa
+              Ingresar Novedad Formativa
             </h3>
             <p className="text-xs text-slate-600 mt-1">
-              El sistema calculará automáticamente si corresponde al 1°, 2° o 3° llamado y activará el Plan de Mejoramiento al 3er llamado.
+              Actualiza automáticamente la lista de verificación y el reporte individual del aprendiz.
             </p>
           </div>
 
@@ -442,15 +318,13 @@ export const InstructorPortal: React.FC<InstructorPortalProps> = ({
           )}
 
           <form onSubmit={handleSubmitNovedad} className="space-y-5 text-xs">
-            
-            {/* Ficha & Aprendiz */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <label className="block font-bold text-slate-700">Ficha de Formación</label>
+                <label className="block font-bold text-slate-700">Ficha</label>
                 <select
                   value={formData.ficha}
                   onChange={(e) => setFormData({ ...formData, ficha: e.target.value, aprendizDocumento: '' })}
-                  className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 text-sm font-semibold outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
+                  className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 text-sm font-semibold outline-none focus:ring-2 focus:ring-emerald-500"
                 >
                   <option value="3384701">Ficha 3384701 - Gestión Empresarial</option>
                   <option value="3384773">Ficha 3384773 - Gestión Empresarial</option>
@@ -458,35 +332,34 @@ export const InstructorPortal: React.FC<InstructorPortalProps> = ({
               </div>
 
               <div className="space-y-1.5">
-                <label className="block font-bold text-slate-700">Aprendiz Responsable</label>
+                <label className="block font-bold text-slate-700">Aprendiz</label>
                 <select
                   value={formData.aprendizDocumento}
                   onChange={(e) => setFormData({ ...formData, aprendizDocumento: e.target.value })}
                   required
-                  className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 text-sm font-semibold outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
+                  className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 text-sm font-semibold outline-none focus:ring-2 focus:ring-emerald-500"
                 >
                   <option value="">-- Seleccionar Aprendiz --</option>
                   {aprendices.filter(a => a.ficha === formData.ficha).map(a => (
                     <option key={a.documento} value={a.documento}>
-                      {a.apellidos} {a.nombre} ({stats.countMap[a.documento]?.total || 0} llamados previos)
+                      {a.apellidos} {a.nombre} ({stats.countMap[a.documento]?.total || 0} llamados)
                     </option>
                   ))}
                 </select>
               </div>
             </div>
 
-            {/* Tipo de Novedad y Fecha */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <label className="block font-bold text-slate-700">Tipo de Incumplimiento</label>
                 <select
                   value={formData.tipo}
                   onChange={(e) => setFormData({ ...formData, tipo: e.target.value as TipoIncumplimiento })}
-                  className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 text-sm font-semibold outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
+                  className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 text-sm font-semibold outline-none focus:ring-2 focus:ring-emerald-500"
                 >
                   <option value="puntualidad">1. Llegada tarde a la formación (Puntualidad)</option>
                   <option value="uniforme">2. Uso inadecuado del uniforme SENA CSF</option>
-                  <option value="actividades">3. Entrega tardía o no entrega de actividades / evidencias</option>
+                  <option value="actividades">3. Entrega tardía de evidencias / actividades</option>
                 </select>
               </div>
 
@@ -497,226 +370,42 @@ export const InstructorPortal: React.FC<InstructorPortalProps> = ({
                   value={formData.fecha}
                   onChange={(e) => setFormData({ ...formData, fecha: e.target.value })}
                   required
-                  className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
+                  className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
             </div>
 
-            {/* Observación Pedagógica */}
             <div className="space-y-1.5">
-              <label className="block font-bold text-slate-700">Observación Pedagógica de los Hechos</label>
+              <label className="block font-bold text-slate-700">Observación Pedagógica</label>
               <textarea
                 rows={3}
-                placeholder="Describe puntualmente la situación ocurrida en el ambiente de aprendizaje..."
+                placeholder="Detalle de los hechos observados en el ambiente de formación..."
                 value={formData.observacion}
                 onChange={(e) => setFormData({ ...formData, observacion: e.target.value })}
                 required
-                className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
+                className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
 
-            {/* Medida Formativa & Fecha Límite */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="block font-bold text-slate-700">Medida Formativa Sugerida</label>
-                <select
-                  value={formData.medidaFormativa}
-                  onChange={(e) => setFormData({ ...formData, medidaFormativa: e.target.value })}
-                  className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
-                >
-                  <option value="Compromiso escrito de puntualidad y ajuste de horario">Compromiso escrito de puntualidad</option>
-                  <option value="Taller reflexivo sobre imagen profesional y porte del uniforme">Taller reflexivo de uniforme</option>
-                  <option value="Infografía pedagógica sobre deberes del aprendiz (Acuerdo 009/2024)">Infografía pedagógica Acuerdo 009</option>
-                  <option value="Actividad de recuperación académica y entrega concertada">Actividad de recuperación académica</option>
-                  <option value="Reunión de concertación con el equipo ejecutor de la ficha">Reunión de concertación pedagógica</option>
-                </select>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="block font-bold text-slate-700">Fecha Límite para Cumplimiento</label>
-                <input
-                  type="date"
-                  value={formData.fechaLimiteMedida}
-                  onChange={(e) => setFormData({ ...formData, fechaLimiteMedida: e.target.value })}
-                  className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
-                />
-              </div>
-            </div>
-
-            {/* Enlace o Soporte de Evidencia */}
             <div className="space-y-1.5">
-              <label className="block font-bold text-slate-700">Enlace o Soporte de Evidencia (Google Drive / Foto)</label>
+              <label className="block font-bold text-slate-700">Medida Formativa Sugerida</label>
               <input
                 type="text"
-                placeholder="https://drive.google.com/... o referencia del acta"
-                value={formData.soporteUrl}
-                onChange={(e) => setFormData({ ...formData, soporteUrl: e.target.value })}
-                className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white"
+                value={formData.medidaFormativa}
+                onChange={(e) => setFormData({ ...formData, medidaFormativa: e.target.value })}
+                className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
 
-            {/* Botón de Enviar */}
             <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setFormData({ ...formData, observacion: '' })}
-                className="px-5 py-2.5 rounded-2xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50 transition-colors"
-              >
-                Limpiar
-              </button>
               <button
                 type="submit"
                 className="px-6 py-2.5 rounded-2xl bg-emerald-700 hover:bg-emerald-600 text-white font-bold shadow-md hover:shadow-lg transition-all"
               >
-                Guardar y Generar Llamado
+                Guardar Novedad y Actualizar Matriz
               </button>
             </div>
           </form>
-        </div>
-      )}
-
-      {/* 3. VISTA LISTADO DE APRENDICES */}
-      {activeTab === 'aprendices' && (
-        <div className="bg-white rounded-3xl border border-slate-200 shadow-md p-6 space-y-5">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-            <div>
-              <h3 className="text-xl font-black text-slate-900 tracking-tight">
-                Directorio y Récord Disciplinario ({filteredAprendices.length} Aprendices)
-              </h3>
-              <p className="text-xs text-slate-500">
-                Monitoreo individual de los 3 componentes: Puntualidad, Uniforme y Evidencias.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-              <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-2xl border border-slate-200">
-                <button
-                  onClick={() => setFilterFicha('todos')}
-                  className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${
-                    filterFicha === 'todos' ? 'bg-white shadow text-emerald-800' : 'text-slate-600'
-                  }`}
-                >
-                  Todas (56)
-                </button>
-                <button
-                  onClick={() => setFilterFicha('3384701')}
-                  className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${
-                    filterFicha === '3384701' ? 'bg-white shadow text-emerald-800' : 'text-slate-600'
-                  }`}
-                >
-                  3384701 (28)
-                </button>
-                <button
-                  onClick={() => setFilterFicha('3384773')}
-                  className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${
-                    filterFicha === '3384773' ? 'bg-white shadow text-emerald-800' : 'text-slate-600'
-                  }`}
-                >
-                  3384773 (28)
-                </button>
-              </div>
-
-              <div className="relative flex-1 sm:w-60">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
-                <input
-                  type="text"
-                  placeholder="Buscar por nombre o doc..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-300 bg-slate-50 outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Tabla de Aprendices */}
-          <div className="overflow-x-auto border border-slate-200 rounded-2xl">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
-                <tr>
-                  <th className="p-3">Ficha</th>
-                  <th className="p-3">Aprendiz</th>
-                  <th className="p-3">Identificación</th>
-                  <th className="p-3 text-center">1. Puntualidad</th>
-                  <th className="p-3 text-center">2. Uniforme</th>
-                  <th className="p-3 text-center">3. Evidencias</th>
-                  <th className="p-3 text-center">Total</th>
-                  <th className="p-3 text-center">Estado</th>
-                  <th className="p-3 text-right">Acción</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredAprendices.map(a => {
-                  const counts = stats.countMap[a.documento] || { puntualidad: 0, uniforme: 0, actividades: 0, total: 0 };
-                  const aprendizNovedades = novedades.filter(n => n.aprendizDocumento === a.documento);
-
-                  return (
-                    <tr key={a.documento} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="p-3 font-semibold text-emerald-800 whitespace-nowrap">{a.ficha}</td>
-                      <td className="p-3 font-bold text-slate-900">
-                        {a.apellidos} {a.nombre}
-                      </td>
-                      <td className="p-3 text-slate-500 whitespace-nowrap">
-                        {a.tipoDocumento} {a.documento}
-                      </td>
-                      <td className="p-3 text-center">
-                        <span className={`px-2 py-0.5 rounded-full font-bold ${
-                          counts.puntualidad === 0 ? 'text-slate-400' : 'bg-amber-100 text-amber-800'
-                        }`}>
-                          {counts.puntualidad}
-                        </span>
-                      </td>
-                      <td className="p-3 text-center">
-                        <span className={`px-2 py-0.5 rounded-full font-bold ${
-                          counts.uniforme === 0 ? 'text-slate-400' : 'bg-emerald-100 text-emerald-800'
-                        }`}>
-                          {counts.uniforme}
-                        </span>
-                      </td>
-                      <td className="p-3 text-center">
-                        <span className={`px-2 py-0.5 rounded-full font-bold ${
-                          counts.actividades === 0 ? 'text-slate-400' : 'bg-blue-100 text-blue-800'
-                        }`}>
-                          {counts.actividades}
-                        </span>
-                      </td>
-                      <td className="p-3 text-center">
-                        <span className={`px-2 py-0.5 rounded-full font-black ${
-                          counts.total === 0 ? 'text-emerald-600' : counts.total < 3 ? 'text-amber-600' : 'text-red-600'
-                        }`}>
-                          {counts.total} / 3
-                        </span>
-                      </td>
-                      <td className="p-3 text-center whitespace-nowrap">
-                        {counts.total === 0 ? (
-                          <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">
-                            Al Día
-                          </span>
-                        ) : counts.total < 3 ? (
-                          <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800">
-                            Preventivo ({counts.total})
-                          </span>
-                        ) : (
-                          <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-red-100 text-red-800 animate-pulse">
-                            PMD Activo
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-3 text-right whitespace-nowrap">
-                        <button
-                          onClick={() => onOpenReportModal(a, aprendizNovedades)}
-                          className="inline-flex items-center gap-1 px-3 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-[11px] shadow-sm transition-colors"
-                        >
-                          <Printer className="w-3.5 h-3.5" />
-                          Acta Oficial
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
         </div>
       )}
 
@@ -729,7 +418,7 @@ export const InstructorPortal: React.FC<InstructorPortalProps> = ({
               Acuerdo 009 de 2024 · Planes de Mejoramiento Disciplinario (PMD)
             </span>
             <h3 className="text-2xl font-black text-slate-900 tracking-tight">
-              Aprendices con 3 Llamados Acumulados ({aprendicesConPMD.length})
+              Aprendices con 3 Llamados o Plan de Mejoramiento Activo ({aprendicesConPMD.length})
             </h3>
             <p className="text-xs text-slate-600 mt-1">
               Conforme al Reglamento del Aprendiz SENA, al acumular 3 llamados en cualquiera de los componentes se suscribe el Plan de Mejoramiento con seguimiento estricto.
@@ -747,8 +436,9 @@ export const InstructorPortal: React.FC<InstructorPortalProps> = ({
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {aprendicesConPMD.map(a => {
+                const c = checklist.find(item => item.aprendizDocumento === a.documento);
                 const counts = stats.countMap[a.documento] || { puntualidad: 0, uniforme: 0, actividades: 0, total: 0 };
-                const aprendizNovedades = novedades.filter(n => n.aprendizDocumento === a.documento);
+                const aprNovedades = novedades.filter(n => n.aprendizDocumento === a.documento);
 
                 return (
                   <div key={a.documento} className="p-5 rounded-2xl bg-red-50/50 border border-red-200 space-y-3">
@@ -760,7 +450,7 @@ export const InstructorPortal: React.FC<InstructorPortalProps> = ({
                         <h4 className="text-base font-black text-slate-900 mt-1">
                           {a.apellidos} {a.nombre}
                         </h4>
-                        <p className="text-xs text-slate-500">{a.tipoDocumento} {a.documento}</p>
+                        <p className="text-xs text-slate-500">{a.tipoDocumento} {a.documento} · {c?.correo || a.correo}</p>
                       </div>
 
                       <span className="text-xl font-black text-red-600 bg-white px-3 py-1 rounded-xl shadow-sm border border-red-200">
@@ -770,12 +460,12 @@ export const InstructorPortal: React.FC<InstructorPortalProps> = ({
 
                     <div className="grid grid-cols-3 gap-2 text-center text-xs bg-white p-2.5 rounded-xl border border-red-100">
                       <div>
-                        <span className="text-slate-400 block text-[10px]">Puntualidad</span>
-                        <span className="font-bold text-slate-800">{counts.puntualidad}</span>
-                      </div>
-                      <div>
                         <span className="text-slate-400 block text-[10px]">Uniforme</span>
                         <span className="font-bold text-slate-800">{counts.uniforme}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block text-[10px]">Puntualidad</span>
+                        <span className="font-bold text-slate-800">{counts.puntualidad}</span>
                       </div>
                       <div>
                         <span className="text-slate-400 block text-[10px]">Evidencias</span>
@@ -784,15 +474,20 @@ export const InstructorPortal: React.FC<InstructorPortalProps> = ({
                     </div>
 
                     <div className="flex items-center justify-between pt-2">
-                      <span className="text-[11px] font-semibold text-red-800">
-                        Estado: En suscripción de compromisos
-                      </span>
                       <button
-                        onClick={() => onOpenReportModal(a, aprendizNovedades)}
+                        onClick={() => onOpenEmailModal(a, 'pmd', 3)}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-700 hover:bg-red-800 text-white text-xs font-bold shadow-sm transition-colors"
                       >
+                        <Mail className="w-3.5 h-3.5" />
+                        Remitir Notificación PMD
+                      </button>
+
+                      <button
+                        onClick={() => onOpenReportModal(a, aprNovedades)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-sm transition-colors"
+                      >
                         <Printer className="w-3.5 h-3.5" />
-                        Generar Acta PMD
+                        Acta Oficial PMD
                       </button>
                     </div>
                   </div>

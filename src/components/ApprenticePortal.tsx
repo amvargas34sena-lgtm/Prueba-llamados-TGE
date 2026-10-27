@@ -15,18 +15,22 @@ import {
   Building,
   GraduationCap
 } from 'lucide-react';
-import { Aprendiz, Novedad, TipoIncumplimiento } from '../types';
+import { Aprendiz, Novedad, TipoIncumplimiento, ChecklistRegistro } from '../types';
 import { MotivationalBanners } from './MotivationalBanners';
+import { DidacticCharts } from './DidacticCharts';
+import { StatisticalTrioCharts } from './StatisticalTrioCharts';
 
 interface ApprenticePortalProps {
   aprendices: Aprendiz[];
   novedades: Novedad[];
+  checklist?: ChecklistRegistro[];
   onOpenReportModal?: (aprendiz: Aprendiz, novedades: Novedad[]) => void;
 }
 
 export const ApprenticePortal: React.FC<ApprenticePortalProps> = ({
   aprendices,
   novedades,
+  checklist = [],
   onOpenReportModal
 }) => {
   const [selectedFicha, setSelectedFicha] = useState<string>('3384701');
@@ -59,33 +63,256 @@ export const ApprenticePortal: React.FC<ApprenticePortalProps> = ({
     return aprendices.find(a => a.documento === selectedDocumento);
   }, [aprendices, selectedDocumento]);
 
+  // Checklist record of the selected apprentice
+  const aprendizChecklist = useMemo(() => {
+    if (!selectedDocumento || !checklist) return null;
+    return checklist.find(c => c.aprendizDocumento === selectedDocumento);
+  }, [checklist, selectedDocumento]);
+
   // Novedades of the selected apprentice
   const aprendizNovedades = useMemo(() => {
     if (!selectedDocumento) return [];
     return novedades.filter(n => n.aprendizDocumento === selectedDocumento);
   }, [novedades, selectedDocumento]);
 
-  // Individual counts per component
-  const conteoPuntualidad = useMemo(() => {
-    return aprendizNovedades.filter(n => n.tipo === 'puntualidad').length;
-  }, [aprendizNovedades]);
-
+  // Individual counts derived from Checklist (primary source of truth)
   const conteoUniforme = useMemo(() => {
+    if (aprendizChecklist) {
+      return (aprendizChecklist.uniforme1Fecha ? 1 : 0) +
+             (aprendizChecklist.uniforme2Fecha ? 1 : 0) +
+             (aprendizChecklist.uniforme3Fecha ? 1 : 0);
+    }
     return aprendizNovedades.filter(n => n.tipo === 'uniforme').length;
-  }, [aprendizNovedades]);
+  }, [aprendizChecklist, aprendizNovedades]);
+
+  const conteoPuntualidad = useMemo(() => {
+    if (aprendizChecklist) {
+      return (aprendizChecklist.puntualidad1Fecha ? 1 : 0) +
+             (aprendizChecklist.puntualidad2Fecha ? 1 : 0) +
+             (aprendizChecklist.puntualidad3Fecha ? 1 : 0);
+    }
+    return aprendizNovedades.filter(n => n.tipo === 'puntualidad').length;
+  }, [aprendizChecklist, aprendizNovedades]);
 
   const conteoActividades = useMemo(() => {
+    if (aprendizChecklist) {
+      return (aprendizChecklist.evidencias1Fecha ? 1 : 0) +
+             (aprendizChecklist.evidencias2Fecha ? 1 : 0) +
+             (aprendizChecklist.evidencias3Fecha ? 1 : 0);
+    }
     return aprendizNovedades.filter(n => n.tipo === 'actividades').length;
-  }, [aprendizNovedades]);
+  }, [aprendizChecklist, aprendizNovedades]);
 
   const totalLlamados = conteoPuntualidad + conteoUniforme + conteoActividades;
 
-  // Plan de Mejoramiento active if >= 3 warnings
-  const tienePlanMejoramiento = totalLlamados >= 3;
+  // Plan de Mejoramiento active if >= 3 warnings or explicitly marked
+  const tienePlanMejoramiento = Boolean(
+    totalLlamados >= 3 ||
+    aprendizChecklist?.uniformePlanMejoramiento ||
+    aprendizChecklist?.puntualidadPlanMejoramiento ||
+    aprendizChecklist?.evidenciasPlanMejoramiento
+  );
+
+  // List of Formative Measures from Checklist with delivery status & deadlines
+  const medidasList = useMemo(() => {
+    if (!aprendizChecklist) return [];
+    const list: {
+      id: string;
+      tipo: 'puntualidad' | 'uniforme' | 'actividades' | 'pmd';
+      componente: string;
+      llamado: string;
+      fecha: string;
+      fechaLimite: string;
+      entregada: boolean;
+      observacion: string;
+    }[] = [];
+
+    const addDays = (d: string, n: number) => {
+      try {
+        const dt = new Date(d);
+        dt.setDate(dt.getDate() + n);
+        return dt.toISOString().split('T')[0];
+      } catch {
+        return d;
+      }
+    };
+
+    // Uniforme
+    if (aprendizChecklist.uniforme1Fecha) {
+      list.push({
+        id: 'u1',
+        tipo: 'uniforme',
+        componente: 'Uniforme Institucional',
+        llamado: '1° Llamado',
+        fecha: aprendizChecklist.uniforme1Fecha,
+        fechaLimite: aprendizChecklist.uniforme1FechaLimite || addDays(aprendizChecklist.uniforme1Fecha, 5),
+        entregada: Boolean(aprendizChecklist.uniforme1Entregada),
+        observacion: 'Taller de sensibilización y protocolo de prendas institucionales SENA CSF'
+      });
+    }
+    if (aprendizChecklist.uniforme2Fecha) {
+      list.push({
+        id: 'u2',
+        tipo: 'uniforme',
+        componente: 'Uniforme Institucional',
+        llamado: '2° Llamado',
+        fecha: aprendizChecklist.uniforme2Fecha,
+        fechaLimite: aprendizChecklist.uniforme2FechaLimite || addDays(aprendizChecklist.uniforme2Fecha, 5),
+        entregada: Boolean(aprendizChecklist.uniforme2Entregada),
+        observacion: 'Acta de compromiso y presentación personal suscrita'
+      });
+    }
+    if (aprendizChecklist.uniforme3Fecha) {
+      list.push({
+        id: 'u3',
+        tipo: 'uniforme',
+        componente: 'Uniforme Institucional',
+        llamado: '3° Llamado',
+        fecha: aprendizChecklist.uniforme3Fecha,
+        fechaLimite: aprendizChecklist.uniforme3FechaLimite || addDays(aprendizChecklist.uniforme3Fecha, 5),
+        entregada: Boolean(aprendizChecklist.uniforme3Entregada),
+        observacion: 'Plan de acción pedagógico correctivo de uniforme'
+      });
+    }
+    if (aprendizChecklist.uniformePlanMejoramiento && aprendizChecklist.uniformePlanFecha) {
+      list.push({
+        id: 'upmd',
+        tipo: 'pmd',
+        componente: 'Uniforme Institucional',
+        llamado: 'Plan de Mejoramiento Disciplinario',
+        fecha: aprendizChecklist.uniformePlanFecha,
+        fechaLimite: aprendizChecklist.uniformePlanFechaLimite || addDays(aprendizChecklist.uniformePlanFecha, 10),
+        entregada: Boolean(aprendizChecklist.uniformePlanEntregado),
+        observacion: 'Cumplimiento del Plan de Mejoramiento Disciplinario (PMD) ante coordinación'
+      });
+    }
+
+    // Puntualidad
+    if (aprendizChecklist.puntualidad1Fecha) {
+      list.push({
+        id: 'p1',
+        tipo: 'puntualidad',
+        componente: 'Puntualidad y Asistencia',
+        llamado: '1° Llamado',
+        fecha: aprendizChecklist.puntualidad1Fecha,
+        fechaLimite: aprendizChecklist.puntualidad1FechaLimite || addDays(aprendizChecklist.puntualidad1Fecha, 5),
+        entregada: Boolean(aprendizChecklist.puntualidad1Entregada),
+        observacion: 'Compromiso pedagógico de gestión del tiempo y transporte'
+      });
+    }
+    if (aprendizChecklist.puntualidad2Fecha) {
+      list.push({
+        id: 'p2',
+        tipo: 'puntualidad',
+        componente: 'Puntualidad y Asistencia',
+        llamado: '2° Llamado',
+        fecha: aprendizChecklist.puntualidad2Fecha,
+        fechaLimite: aprendizChecklist.puntualidad2FechaLimite || addDays(aprendizChecklist.puntualidad2Fecha, 5),
+        entregada: Boolean(aprendizChecklist.puntualidad2Entregada),
+        observacion: 'Estrategia de compensación horaria y registro de ingreso'
+      });
+    }
+    if (aprendizChecklist.puntualidad3Fecha) {
+      list.push({
+        id: 'p3',
+        tipo: 'puntualidad',
+        componente: 'Puntualidad y Asistencia',
+        llamado: '3° Llamado',
+        fecha: aprendizChecklist.puntualidad3Fecha,
+        fechaLimite: aprendizChecklist.puntualidad3FechaLimite || addDays(aprendizChecklist.puntualidad3Fecha, 5),
+        entregada: Boolean(aprendizChecklist.puntualidad3Entregada),
+        observacion: 'Reunión con bienestar al aprendiz y plan de mejoramiento'
+      });
+    }
+    if (aprendizChecklist.puntualidadPlanMejoramiento && aprendizChecklist.puntualidadPlanFecha) {
+      list.push({
+        id: 'ppmd',
+        tipo: 'pmd',
+        componente: 'Puntualidad y Asistencia',
+        llamado: 'Plan de Mejoramiento Disciplinario',
+        fecha: aprendizChecklist.puntualidadPlanFecha,
+        fechaLimite: aprendizChecklist.puntualidadPlanFechaLimite || addDays(aprendizChecklist.puntualidadPlanFecha, 10),
+        entregada: Boolean(aprendizChecklist.puntualidadPlanEntregado),
+        observacion: 'Cumplimiento del Plan de Mejoramiento Disciplinario (PMD) de asistencia'
+      });
+    }
+
+    // Evidencias
+    if (aprendizChecklist.evidencias1Fecha) {
+      list.push({
+        id: 'e1',
+        tipo: 'actividades',
+        componente: 'Evidencias Académicas',
+        llamado: '1° Llamado',
+        fecha: aprendizChecklist.evidencias1Fecha,
+        fechaLimite: aprendizChecklist.evidencias1FechaLimite || addDays(aprendizChecklist.evidencias1Fecha, 5),
+        entregada: Boolean(aprendizChecklist.evidencias1Entregada),
+        observacion: 'Entrega extemporánea de taller o guía de aprendizaje pendiente'
+      });
+    }
+    if (aprendizChecklist.evidencias2Fecha) {
+      list.push({
+        id: 'e2',
+        tipo: 'actividades',
+        componente: 'Evidencias Académicas',
+        llamado: '2° Llamado',
+        fecha: aprendizChecklist.evidencias2Fecha,
+        fechaLimite: aprendizChecklist.evidencias2FechaLimite || addDays(aprendizChecklist.evidencias2Fecha, 5),
+        entregada: Boolean(aprendizChecklist.evidencias2Entregada),
+        observacion: 'Nivelación de resultados de aprendizaje no alcanzados'
+      });
+    }
+    if (aprendizChecklist.evidencias3Fecha) {
+      list.push({
+        id: 'e3',
+        tipo: 'actividades',
+        componente: 'Evidencias Académicas',
+        llamado: '3° Llamado',
+        fecha: aprendizChecklist.evidencias3Fecha,
+        fechaLimite: aprendizChecklist.evidencias3FechaLimite || addDays(aprendizChecklist.evidencias3Fecha, 5),
+        entregada: Boolean(aprendizChecklist.evidencias3Entregada),
+        observacion: 'Plan de mejoramiento académico por evidencias acumuladas'
+      });
+    }
+    if (aprendizChecklist.evidenciasPlanMejoramiento && aprendizChecklist.evidenciasPlanFecha) {
+      list.push({
+        id: 'epmd',
+        tipo: 'pmd',
+        componente: 'Evidencias Académicas',
+        llamado: 'Plan de Mejoramiento Disciplinario/Académico',
+        fecha: aprendizChecklist.evidenciasPlanFecha,
+        fechaLimite: aprendizChecklist.evidenciasPlanFechaLimite || addDays(aprendizChecklist.evidenciasPlanFecha, 10),
+        entregada: Boolean(aprendizChecklist.evidenciasPlanEntregado),
+        observacion: 'Cumplimiento del Plan de Mejoramiento de Evidencias concertado con el instructor'
+      });
+    }
+
+    return list;
+  }, [aprendizChecklist]);
+
+  // Today for comparison
+  const hoyStr = new Date().toISOString().split('T')[0];
+  const medidasPendientesCount = useMemo(() => {
+    return medidasList.filter(m => !m.entregada).length;
+  }, [medidasList]);
 
   return (
     <div className="max-w-6xl mx-auto space-y-10">
       
+      {/* CAMPO PRINCIPAL: 3 GRÁFICOS ESTADÍSTICOS ALINEADOS (SANKEY, HEATMAP, BUMP CHART) */}
+      <section>
+        <StatisticalTrioCharts
+          aprendices={aprendices}
+          checklist={checklist}
+          onSelectAprendiz={(documento, ficha) => {
+            setSelectedFicha(ficha);
+            setSelectedDocumento(documento);
+            const el = document.getElementById('reporte-aprendiz-section');
+            if (el) el.scrollIntoView({ behavior: 'smooth' });
+          }}
+        />
+      </section>
+
       {/* 1. SECCIÓN DE ANUNCIOS MOTIVACIONALES (CON FOTOS REALES DE APRENDICES CSF) */}
       <section>
         <div className="flex items-center justify-between mb-4">
@@ -109,7 +336,21 @@ export const ApprenticePortal: React.FC<ApprenticePortalProps> = ({
         />
       </section>
 
-      {/* 2. MÓDULO DE CONSULTA INDIVIDUAL DEL APRENDIZ */}
+      {/* 2. GRÁFICAS DIDÁCTICAS TEMÁTICAS (PUNTUALIDAD, UNIFORME, EVIDENCIAS) */}
+      <section>
+        <DidacticCharts
+          aprendices={aprendices}
+          checklist={checklist}
+          onSelectAprendiz={(documento, ficha) => {
+            setSelectedFicha(ficha);
+            setSelectedDocumento(documento);
+            const el = document.getElementById('reporte-aprendiz-section');
+            if (el) el.scrollIntoView({ behavior: 'smooth' });
+          }}
+        />
+      </section>
+
+      {/* 3. MÓDULO DE CONSULTA INDIVIDUAL DEL APRENDIZ */}
       <section id="reporte-aprendiz-section" className="space-y-6">
         <div className="bg-white rounded-3xl border border-slate-200/90 shadow-md p-6 sm:p-8 space-y-6">
           <div className="border-b border-slate-100 pb-5">
@@ -427,6 +668,110 @@ export const ApprenticePortal: React.FC<ApprenticePortalProps> = ({
                   </div>
                 </div>
               )}
+
+              {/* CONTROL DE ENTREGA DE MEDIDAS FORMATIVAS Y COMPROMISOS */}
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    Control de Entrega de Medidas Formativas y Compromisos
+                  </h4>
+                  <div className="flex items-center gap-2">
+                    {medidasPendientesCount > 0 ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                        <Clock className="w-3.5 h-3.5" />
+                        {medidasPendientesCount} {medidasPendientesCount === 1 ? 'medida pendiente' : 'medidas pendientes'}
+                      </span>
+                    ) : medidasList.length > 0 ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Todas las medidas entregadas
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+
+                {medidasList.length === 0 ? (
+                  <div className="p-5 rounded-2xl bg-emerald-50/70 border border-emerald-200 text-xs text-emerald-900 flex items-center gap-3">
+                    <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <div>
+                      <p className="font-bold">¡Sin compromisos ni medidas pendientes!</p>
+                      <p className="text-[11px] text-emerald-800 mt-0.5">
+                        No registras llamados de atención activos que requieran la entrega de medidas pedagógicas correctivas.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {medidasList.map(medida => {
+                      const isVencida = !medida.entregada && medida.fechaLimite < hoyStr;
+                      return (
+                        <div 
+                          key={medida.id}
+                          className={`p-4 rounded-2xl border transition-all ${
+                            medida.entregada 
+                              ? 'bg-emerald-50/40 border-emerald-300' 
+                              : isVencida 
+                              ? 'bg-red-50/60 border-red-300 ring-1 ring-red-400/30' 
+                              : 'bg-amber-50/40 border-amber-300'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider ${
+                                medida.tipo === 'uniforme' 
+                                  ? 'bg-emerald-200/80 text-emerald-900' 
+                                  : medida.tipo === 'puntualidad' 
+                                  ? 'bg-amber-200/80 text-amber-900' 
+                                  : medida.tipo === 'pmd'
+                                  ? 'bg-red-200/80 text-red-900'
+                                  : 'bg-blue-200/80 text-blue-900'
+                              }`}>
+                                {medida.componente}
+                              </span>
+                              <span className="text-xs font-bold text-slate-800">
+                                {medida.llamado}
+                              </span>
+                            </div>
+
+                            {/* Badge de Entrega */}
+                            {medida.entregada ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-xs">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                Entregada y Aprobada
+                              </span>
+                            ) : isVencida ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-red-100 text-red-800 border border-red-300 shadow-xs animate-pulse">
+                                <AlertTriangle className="w-3.5 h-3.5 text-red-600" />
+                                Vencida ({medida.fechaLimite})
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-300 shadow-xs">
+                                <Clock className="w-3.5 h-3.5 text-amber-600" />
+                                Pendiente de Entrega
+                              </span>
+                            )}
+                          </div>
+
+                          <p className="text-xs text-slate-700 font-medium mb-2">
+                            {medida.observacion}
+                          </p>
+
+                          <div className="flex items-center justify-between text-[11px] text-slate-500 pt-2 border-t border-slate-200/60">
+                            <span className="flex items-center gap-1">
+                              <Calendar className="w-3 h-3 text-slate-400" />
+                              Registrado: <strong>{medida.fecha}</strong>
+                            </span>
+                            <span>
+                              Plazo Límite: <strong className={isVencida ? 'text-red-700 font-bold' : 'text-slate-800'}>{medida.fechaLimite}</strong>
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
 
               {/* DETALLE DEL HISTORIAL DE NOVEDADES */}
               <div className="space-y-3">

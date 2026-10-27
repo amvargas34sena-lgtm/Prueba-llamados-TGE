@@ -8,21 +8,28 @@ import {
   Users, 
   GraduationCap, 
   Sparkles, 
-  ArrowLeft, 
   Building2, 
   RotateCcw,
-  ShieldCheck
+  ShieldCheck,
+  CheckSquare,
+  BookOpen
 } from 'lucide-react';
-import { aprendices as rawAprendices, initialNovedades } from './data';
-import { Aprendiz, Novedad } from './types';
+import { aprendices as rawAprendices, initialNovedades, initialChecklist } from './data';
+import { Aprendiz, Novedad, ChecklistRegistro } from './types';
 import { ApprenticePortal } from './components/ApprenticePortal';
 import { InstructorPortal } from './components/InstructorPortal';
 import { LlamadoModal } from './components/LlamadoModal';
+import { EmailPreviewModal } from './components/EmailPreviewModal';
+import { ManualConsultaModal } from './components/ManualConsultaModal';
 
 const STORAGE_KEY_NOVEDADES = 'sena_csf_novedades_v1';
+const STORAGE_KEY_CHECKLIST = 'sena_csf_checklist_v1';
 
 export default function App() {
-  const [role, setRole] = useState<'instructor' | 'aprendiz' | null>('aprendiz');
+  const [role, setRole] = useState<'instructor' | 'aprendiz' | null>('instructor');
+  const [showManualModal, setShowManualModal] = useState<boolean>(false);
+  
+  // Persistent Novedades
   const [novedades, setNovedades] = useState<Novedad[]>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY_NOVEDADES);
@@ -35,6 +42,29 @@ export default function App() {
     return initialNovedades;
   });
 
+  // Persistent Checklist Matrix (Lista de Verificación)
+  const [checklist, setChecklist] = useState<ChecklistRegistro[]>(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY_CHECKLIST);
+      if (stored) {
+        const parsed: ChecklistRegistro[] = JSON.parse(stored);
+        // Automatically sync authentic emails from rawAprendices
+        const emailMap = new Map(rawAprendices.map(a => [a.documento, a.correo || '']));
+        return parsed.map(c => {
+          const freshEmail = emailMap.get(c.aprendizDocumento);
+          if (freshEmail && (!c.correo || c.correo.includes('@misena.edu.co') || c.correo !== freshEmail)) {
+            return { ...c, correo: freshEmail };
+          }
+          return c;
+        });
+      }
+    } catch {
+      // Fallback
+    }
+    return initialChecklist;
+  });
+
+  // Modal State for Official Print / PDF
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
     aprendiz: Aprendiz | null;
@@ -43,6 +73,20 @@ export default function App() {
     isOpen: false,
     aprendiz: null,
     novedades: []
+  });
+
+  // Modal State for Reviewing and Sending Email
+  const [emailModalState, setEmailModalState] = useState<{
+    isOpen: boolean;
+    aprendiz: Aprendiz | null;
+    tipo: 'uniforme' | 'puntualidad' | 'actividades' | 'pmd';
+    nivel: 1 | 2 | 3;
+    fecha?: string;
+  }>({
+    isOpen: false,
+    aprendiz: null,
+    tipo: 'puntualidad',
+    nivel: 1
   });
 
   // Persist novedades in localStorage
@@ -54,9 +98,42 @@ export default function App() {
     }
   }, [novedades]);
 
-  // Handler to add a new incident
+  // Persist checklist in localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_CHECKLIST, JSON.stringify(checklist));
+    } catch (err) {
+      console.error('Error saving checklist to localStorage', err);
+    }
+  }, [checklist]);
+
+  // Handler to update a single cell in the checklist
+  const handleUpdateChecklistCell = (
+    documento: string,
+    field: keyof ChecklistRegistro,
+    value: string | boolean | undefined
+  ) => {
+    setChecklist(prev => prev.map(item => {
+      if (item.aprendizDocumento === documento) {
+        return { ...item, [field]: value };
+      }
+      return item;
+    }));
+  };
+
+  // Handler to batch update emails
+  const handleBatchUpdateEmails = (updates: { documento: string; correo: string }[]) => {
+    const map = new Map(updates.map(u => [u.documento, u.correo]));
+    setChecklist(prev => prev.map(item => {
+      if (map.has(item.aprendizDocumento)) {
+        return { ...item, correo: map.get(item.aprendizDocumento)! };
+      }
+      return item;
+    }));
+  };
+
+  // Handler to add a new incident from form
   const handleAddNovedad = (newNov: Omit<Novedad, 'id' | 'nivelLlamado'>) => {
-    // Determine existing count for this learner
     const existingCount = novedades.filter(n => n.aprendizDocumento === newNov.aprendizDocumento).length;
     const nextLevel = Math.min(existingCount + 1, 3) as 1 | 2 | 3;
 
@@ -70,19 +147,42 @@ export default function App() {
   };
 
   // Open official print modal
-  const handleOpenReportModal = (aprendiz: Aprendiz, aprendizNovedades: Novedad[]) => {
+  const handleOpenReportModal = (aprendiz: Aprendiz, aprendizNovedades?: Novedad[]) => {
+    const novs = aprendizNovedades || novedades.filter(n => n.aprendizDocumento === aprendiz.documento);
     setModalState({
       isOpen: true,
       aprendiz,
-      novedades: aprendizNovedades
+      novedades: novs
+    });
+  };
+
+  // Open email review modal
+  const handleOpenEmailModal = (
+    aprendiz: Aprendiz,
+    tipo: 'uniforme' | 'puntualidad' | 'actividades' | 'pmd',
+    nivel: 1 | 2 | 3,
+    fecha?: string
+  ) => {
+    // Synchronize latest email from checklist
+    const c = checklist.find(item => item.aprendizDocumento === aprendiz.documento);
+    const updatedAprendiz = { ...aprendiz, correo: c?.correo || aprendiz.correo };
+
+    setEmailModalState({
+      isOpen: true,
+      aprendiz: updatedAprendiz,
+      tipo,
+      nivel,
+      fecha: fecha || new Date().toISOString().split('T')[0]
     });
   };
 
   // Reset to initial demo data
   const handleResetData = () => {
-    if (window.confirm('¿Deseas reiniciar los llamados disciplinarios a los datos de prueba institucionales?')) {
+    if (window.confirm('¿Deseas reiniciar la lista de verificación y novedades a los datos originales de prueba?')) {
       setNovedades(initialNovedades);
+      setChecklist(initialChecklist);
       localStorage.setItem(STORAGE_KEY_NOVEDADES, JSON.stringify(initialNovedades));
+      localStorage.setItem(STORAGE_KEY_CHECKLIST, JSON.stringify(initialChecklist));
     }
   };
 
@@ -120,17 +220,6 @@ export default function App() {
             {role && (
               <div className="flex items-center p-1 bg-slate-100 rounded-2xl border border-slate-200 text-xs font-bold">
                 <button
-                  onClick={() => setRole('aprendiz')}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all ${
-                    role === 'aprendiz'
-                      ? 'bg-white shadow text-emerald-800'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <GraduationCap className="w-4 h-4" />
-                  <span className="hidden sm:inline">Módulo</span> Aprendiz
-                </button>
-                <button
                   onClick={() => setRole('instructor')}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all ${
                     role === 'instructor'
@@ -141,8 +230,29 @@ export default function App() {
                   <Users className="w-4 h-4" />
                   <span className="hidden sm:inline">Módulo</span> Instructor
                 </button>
+                <button
+                  onClick={() => setRole('aprendiz')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all ${
+                    role === 'aprendiz'
+                      ? 'bg-white shadow text-emerald-800'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <GraduationCap className="w-4 h-4" />
+                  <span className="hidden sm:inline">Módulo</span> Aprendiz
+                </button>
               </div>
             )}
+
+            {/* Botón Manual de Consulta */}
+            <button
+              onClick={() => setShowManualModal(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-bold transition-all shadow-xs"
+              title="Abrir Manual de Consulta e Instructivo de Usuario"
+            >
+              <BookOpen className="w-4 h-4 text-emerald-700" />
+              <span className="hidden sm:inline">Manual de Consulta</span>
+            </button>
 
             {role && (
               <button
@@ -193,46 +303,57 @@ export default function App() {
                 SENA - CSF - Gestión Empresarial
               </h1>
               <p className="text-sm sm:text-base text-slate-600 max-w-lg mx-auto leading-relaxed">
-                Plataforma digital para el seguimiento disciplinario, preventivo y formativo, conforme al <strong>Reglamento del Aprendiz SENA (Acuerdo 009 de 2024)</strong>.
+                Plataforma de seguimiento disciplinario con lista de verificación interactiva, control de inasistencias y remisión de notificaciones según el <strong>Acuerdo 009 de 2024</strong>.
               </p>
             </div>
 
             {/* Tarjetas de Selección de Rol */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-lg mx-auto pt-2">
               <button
-                onClick={() => setRole('aprendiz')}
+                onClick={() => setRole('instructor')}
                 className="flex flex-col items-center justify-center p-6 rounded-3xl bg-white border-2 border-emerald-500/80 hover:border-emerald-600 shadow-md hover:shadow-xl transition-all group text-left"
               >
                 <div className="w-14 h-14 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                  <GraduationCap className="w-7 h-7" />
+                  <CheckSquare className="w-7 h-7" />
                 </div>
                 <h3 className="font-extrabold text-base text-slate-900 group-hover:text-emerald-800 transition-colors">
-                  Soy Aprendiz
+                  Soy Instructor
                 </h3>
                 <p className="text-xs text-slate-500 text-center mt-1">
-                  Consulta tu reporte de llamados (llegada tarde, uniforme, evidencias) y anuncios motivacionales.
+                  Lista de verificación tipo matriz, registro de fechas, remisión de correos y planes de mejoramiento.
                 </p>
                 <span className="mt-4 px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 group-hover:bg-emerald-600 group-hover:text-white transition-colors">
-                  Ingresar a Consulta &rarr;
+                  Ingresar a Gestión &rarr;
                 </span>
               </button>
 
               <button
-                onClick={() => setRole('instructor')}
+                onClick={() => setRole('aprendiz')}
                 className="flex flex-col items-center justify-center p-6 rounded-3xl bg-white border-2 border-slate-200 hover:border-slate-800 shadow-md hover:shadow-xl transition-all group text-left"
               >
                 <div className="w-14 h-14 rounded-2xl bg-slate-100 text-slate-800 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                  <Users className="w-7 h-7" />
+                  <GraduationCap className="w-7 h-7" />
                 </div>
                 <h3 className="font-extrabold text-base text-slate-900 group-hover:text-slate-900 transition-colors">
-                  Soy Instructor
+                  Soy Aprendiz
                 </h3>
                 <p className="text-xs text-slate-500 text-center mt-1">
-                  Dashboard de seguimiento, registro de novedades, planes de mejoramiento y actas oficiales.
+                  Consulta tu reporte de llamados (uniforme, puntualidad, evidencias) y anuncios motivacionales.
                 </p>
                 <span className="mt-4 px-3 py-1 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 group-hover:bg-slate-900 group-hover:text-white transition-colors">
-                  Ingresar a Gestión &rarr;
+                  Ingresar a Consulta &rarr;
                 </span>
+              </button>
+            </div>
+
+            {/* Botón de acceso directo al Manual de Consulta */}
+            <div className="pt-1">
+              <button
+                onClick={() => setShowManualModal(true)}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-bold transition-all shadow-xs hover:shadow-md"
+              >
+                <BookOpen className="w-4 h-4 text-emerald-700" />
+                <span>Manual de Consulta e Instructivo de Aprendices (Acuerdo 009 de 2024)</span>
               </button>
             </div>
 
@@ -251,21 +372,26 @@ export default function App() {
           </div>
         )}
 
-        {/* MÓDULO DE APRENDICES */}
-        {role === 'aprendiz' && (
-          <ApprenticePortal
-            aprendices={rawAprendices}
-            novedades={novedades}
-            onOpenReportModal={handleOpenReportModal}
-          />
-        )}
-
         {/* MÓDULO DE INSTRUCTORES */}
         {role === 'instructor' && (
           <InstructorPortal
             aprendices={rawAprendices}
             novedades={novedades}
+            checklist={checklist}
             onAddNovedad={handleAddNovedad}
+            onUpdateChecklistCell={handleUpdateChecklistCell}
+            onOpenReportModal={handleOpenReportModal}
+            onOpenEmailModal={handleOpenEmailModal}
+            onBatchUpdateEmails={handleBatchUpdateEmails}
+          />
+        )}
+
+        {/* MÓDULO DE APRENDICES */}
+        {role === 'aprendiz' && (
+          <ApprenticePortal
+            aprendices={rawAprendices}
+            novedades={novedades}
+            checklist={checklist}
             onOpenReportModal={handleOpenReportModal}
           />
         )}
@@ -287,6 +413,31 @@ export default function App() {
           aprendiz={modalState.aprendiz}
           novedades={modalState.novedades}
           onClose={() => setModalState({ isOpen: false, aprendiz: null, novedades: [] })}
+        />
+      )}
+
+      {/* MODAL DE REVISIÓN Y ENVÍO DE CORREO AL APRENDIZ */}
+      {emailModalState.isOpen && emailModalState.aprendiz && (
+        <EmailPreviewModal
+          aprendiz={emailModalState.aprendiz}
+          tipoLlamadoInicial={emailModalState.tipo}
+          nivelLlamadoInicial={emailModalState.nivel}
+          fechaLlamado={emailModalState.fecha}
+          onClose={() => setEmailModalState({ isOpen: false, aprendiz: null, tipo: 'puntualidad', nivel: 1 })}
+          onConfirmSend={(emailSentTo, tipo) => {
+            handleUpdateChecklistCell(emailModalState.aprendiz!.documento, 'ultimoCorreoFecha', new Date().toISOString().split('T')[0]);
+            handleUpdateChecklistCell(emailModalState.aprendiz!.documento, 'ultimoCorreoTipo', tipo);
+          }}
+          onUpdateEmail={(doc, newEmail) => {
+            handleUpdateChecklistCell(doc, 'correo', newEmail);
+          }}
+        />
+      )}
+
+      {/* MODAL DEL MANUAL DE CONSULTA E INSTRUCTIVO */}
+      {showManualModal && (
+        <ManualConsultaModal
+          onClose={() => setShowManualModal(false)}
         />
       )}
 
